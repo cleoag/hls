@@ -8,10 +8,16 @@ import (
 	"time"
 
 	"github.com/cleoag/hls"
+	"github.com/cleoag/hls/example/srt"
 	"github.com/nareix/joy4/av/avutil"
+	"github.com/nareix/joy4/format"
 	"github.com/nareix/joy4/format/rtmp"
 	"golang.org/x/sync/errgroup"
 )
+
+func init() {
+	format.RegisterAll()
+}
 
 func main() {
 
@@ -32,8 +38,21 @@ func main() {
 			}
 		},
 	}
+
+	sss := &srt.Server{Host: "localhost", Port: 12345,
+		HandlePublish: func(c *srt.Conn) {
+			defer c.Close()
+			log.Println("publish hls started from srt")
+			if err := avutil.CopyFile(pub, c.Dmx); err != nil {
+				log.Printf("error: publishing %+v", err)
+			}
+		},
+	}
+	//sss.ListenAndServe()
+
 	var eg errgroup.Group
 	eg.Go(rts.ListenAndServe)
+	eg.Go(sss.ListenAndServe)
 
 	http.Handle("/exit/", http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		pub.Close()
