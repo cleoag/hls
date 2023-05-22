@@ -2,16 +2,16 @@ package main
 
 import (
 	"flag"
+	"github.com/cleoag/hls/example/srt"
+	"github.com/nareix/joy4/av/avutil"
+	"github.com/nareix/joy4/format/rtmp"
 	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/cleoag/hls"
-	"github.com/cleoag/hls/example/srt"
-	"github.com/nareix/joy4/av/avutil"
 	"github.com/nareix/joy4/format"
-	"github.com/nareix/joy4/format/rtmp"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -29,6 +29,7 @@ func main() {
 	flag.Parse()
 
 	pub := &hls.Publisher{Mode: hls.Mode(*modePtr), FragmentLength: time.Duration(*fragLenPtr) * time.Millisecond, BufferLength: time.Duration(*bufferLenPtr) * time.Second, InitialDuration: time.Duration(*initialDurationPtr) * time.Second}
+
 	rts := &rtmp.Server{Addr: ":1935",
 		HandlePublish: func(c *rtmp.Conn) {
 			defer c.Close()
@@ -39,16 +40,10 @@ func main() {
 		},
 	}
 
-	sss := &srt.Server{Host: "localhost", Port: 12345,
-		HandlePublish: func(c *srt.Conn) {
-			defer c.Close()
-			log.Println("publish hls started from srt")
-			if err := avutil.CopyFile(pub, c.Dmx); err != nil {
-				log.Printf("error: publishing %+v", err)
-			}
-		},
+	sss := &srt.Server{Host: "127.0.0.1", Port: 12345}
+	sss.HandlePublish = func(c *srt.Conn) {
+
 	}
-	//sss.ListenAndServe()
 
 	var eg errgroup.Group
 	eg.Go(rts.ListenAndServe)
@@ -73,7 +68,7 @@ func main() {
 		//return http.ListenAndServeTLS(":8080", "server.crt", "server.key", nil)
 		return http.ListenAndServe(":8080", nil)
 	})
-	log.Println("listening on rtmp://localhost:1935/live and http://localhost:8080/player.html")
+	log.Println("listening on rtmp://localhost:1935/live, srt on srt://localhost:12345 and http://localhost:8080/player.html")
 	if err := eg.Wait(); err != nil {
 		log.Println("error:", err)
 	}

@@ -1,12 +1,26 @@
 package srt
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"log"
 
 	"github.com/haivision/srtgo"
-	"github.com/nareix/joy4/format/ts"
 )
+
+type SrtReader struct {
+	sock *srtgo.SrtSocket
+}
+
+func (s *SrtReader) Read(p []byte) (n int, err error) {
+	return s.sock.Read(p)
+}
+
+func (s *SrtReader) Seek(offset int64, whence int) (int64, error) {
+	// SRT is a livestreaming protocol and doesn't support seeking
+	return 0, nil
+}
 
 type Server struct {
 	Host string
@@ -18,14 +32,12 @@ type Server struct {
 
 type Conn struct {
 	srtSocket  *srtgo.SrtSocket
-	Dmx        *ts.Demuxer
 	publishing bool
 }
 
 func NewConn(srtSocket *srtgo.SrtSocket) *Conn {
 	conn := &Conn{}
 	conn.srtSocket = srtSocket
-	conn.Dmx = ts.NewDemuxer(srtSocket)
 	conn.publishing = true
 	return conn
 }
@@ -46,7 +58,11 @@ func (self *Server) handleConn(conn *Conn) (err error) {
 
 func (self *Server) ListenAndServe() error {
 
-	srtServer := srtgo.NewSrtSocket(self.Host, uint16(self.Port), map[string]string{})
+	options := make(map[string]string)
+	options["transtype"] = "live"
+	options["payloadsize"] = "1316"
+
+	srtServer := srtgo.NewSrtSocket(self.Host, uint16(self.Port), options)
 
 	// Start listening for incoming connections
 	err := srtServer.Listen(1)
@@ -55,20 +71,30 @@ func (self *Server) ListenAndServe() error {
 	}
 	defer srtServer.Close()
 
-	// Accept an incoming SRT connection
+	srtConn, _, err := srtServer.Accept()
+	if err != nil {
+		log.Fatalf("Failed to accept SRT connection: %v", err)
+	}
+	defer srtConn.Close()
 
-	//srt.dmx = ts.NewDemuxer(srtConn)
-
+	var buf bytes.Buffer
+	tmp := make([]byte, 2048) // adjust buffer size as needed
 	for {
-		srtConn, _, err := srtServer.Accept()
+		n, err := srtConn.Read(tmp)
 		if err != nil {
-			log.Fatalf("Failed to accept SRT connection: %v", err)
+			if err != io.EOF {
+				fmt.Println("read error:", err)
+			}
+			break
 		}
-		defer srtConn.Close()
-
-		demuxer := ts.NewDemuxer(srtConn)
+		log.Println("read:", n)
+		buf.Write(tmp[:n])
+	}
+	/*
 		for {
-			pkt, err := demuxer.ReadPacket()
+			// Read a packet
+
+
 			if err != nil {
 				fmt.Println("srt: server: err:", err)
 				break
@@ -79,27 +105,9 @@ func (self *Server) ListenAndServe() error {
 			fmt.Println("srt: server: pkt:", pkt.Data)
 
 		}
-		/*
-			conn := NewConn(srtConn)
-			go func() {
-				for {
-					pkt, err := conn.Dmx.ReadPacket()
-					if err != nil {
-						fmt.Println("srt: server: err:", err)
-						break
-					}
-					// print packet type
-					fmt.Println("srt: server: pkt:", pkt.IsKeyFrame, pkt.Idx, pkt.Time)
-					// print packet data
-					fmt.Println("srt: server: pkt:", pkt.Data)
 
-				}
-				//err := self.handleConn(conn)
-				fmt.Println("srt: server: client closed err:", err)
-			}()
-		*/
-	}
-
+	*/
+	return nil
 }
 
 func (self *Conn) Close() {
