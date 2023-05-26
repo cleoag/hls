@@ -41,9 +41,6 @@ func main() {
 	}
 
 	sss := &srt.Server{Host: "127.0.0.1", Port: 12345}
-	sss.HandlePublish = func(c *srt.Conn) {
-
-	}
 
 	var eg errgroup.Group
 	eg.Go(rts.ListenAndServe)

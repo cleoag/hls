@@ -1,61 +1,69 @@
 package srt
 
 import (
-	"bytes"
 	"fmt"
-	"github.com/nareix/joy4/format/mp4"
 	"io"
 	"log"
 
 	"github.com/haivision/srtgo"
 )
 
-type SrtReader struct {
-	buffer bytes.Buffer
-	sock   *srtgo.SrtSocket
+type ByteSliceReadSeeker struct {
+	data []byte
+	pos  int64
 }
 
-func (s *SrtReader) Read(p []byte) (n int, err error) {
-	return s.buffer.Read(p)
+func (b *ByteSliceReadSeeker) Read(p []byte) (n int, err error) {
+	if b.pos >= int64(len(b.data)) {
+		return 0, io.EOF
+	}
+
+	n = copy(p, b.data[b.pos:])
+	b.pos += int64(n)
+	return
 }
 
-func (s *SrtReader) Seek(offset int64, whence int) (int64, error) {
-	// SRT is a livestreaming protocol and doesn't support seeking
-	return 0, nil
+func (b *ByteSliceReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	switch whence {
+	case io.SeekStart:
+		if offset < 0 {
+			return 0, fmt.Errorf("negative position")
+		}
+		b.pos = offset
+	case io.SeekCurrent:
+		newPos := b.pos + offset
+		if newPos < 0 {
+			return 0, fmt.Errorf("negative position")
+		}
+		b.pos = newPos
+	case io.SeekEnd:
+		newPos := int64(len(b.data)) + offset
+		if newPos < 0 {
+			return 0, fmt.Errorf("negative position")
+		}
+		b.pos = newPos
+	default:
+		return 0, fmt.Errorf("invalid whence value")
+	}
+
+	return b.pos, nil
 }
 
 type Server struct {
 	Host string
 	Port int
-
-	HandlePublish func(*Conn)
-	HandleConn    func(*Conn)
 }
 
 type Conn struct {
-	srtSocket  *srtgo.SrtSocket
-	publishing bool
+	srtSocket *srtgo.SrtSocket
+	r         *ByteSliceReadSeeker
 }
 
 func NewConn(srtSocket *srtgo.SrtSocket) *Conn {
 	conn := &Conn{}
 	conn.srtSocket = srtSocket
-	conn.publishing = true
+	conn.r = &ByteSliceReadSeeker{}
 	return conn
-}
-
-func (self *Server) handleConn(conn *Conn) (err error) {
-	if self.HandleConn != nil {
-		self.HandleConn(conn)
-	} else {
-		if conn.publishing {
-			if self.HandlePublish != nil {
-				self.HandlePublish(conn)
-			}
-		}
-	}
-
-	return
 }
 
 func (self *Server) ListenAndServe() error {
@@ -79,40 +87,66 @@ func (self *Server) ListenAndServe() error {
 	}
 	defer srtConn.Close()
 
-	srtReader := &SrtReader{sock: srtConn}
-
-	tmp := make([]byte, 2048) // adjust buffer size as needed
-	//	go func() {
+	conn := NewConn(srtConn)
+	conn.r.data = make([]byte, 300000) // adjust buffer size as needed
+	tmp := make([]byte, 20500)
+	isEOF := false
+	//go func() {
 	// loop until EOF
+	pos := 0
 	for i := 0; i < 10; i++ {
 		n, err := srtConn.Read(tmp)
 		if err != nil {
 			if err != io.EOF {
-				fmt.Println("read error:", err)
+				fmt.Println("srt connection read error:", err)
+			} else {
+				fmt.Println("srt connection EOF:", err)
 			}
+			isEOF = true
 			break
 		}
-		log.Println("read:", n)
-		srtReader.buffer.Write(tmp[:n])
+		copy(conn.r.data[pos:], tmp[:n])
+		pos += n
+		log.Println("srt: server: read:", n, "bytes", "total:", len(conn.r.data), "pos:", pos)
 	}
-	//	}()
+	//}()
 
-	demuxer := mp4.NewDemuxer(srtReader)
+	demuxer := NewDemuxer(conn.r)
 
-	for {
-		// Read a packet
-		pkt, err := demuxer.ReadPacket()
+	//read stream info
+	for isEOF == false {
 
+		streams, err := demuxer.Streams()
 		if err != nil {
-			fmt.Println("srt: server: err:", err)
+			fmt.Println("read streams:", err)
 			break
 		}
-		// print packet type
-		fmt.Println("srt: server: pkt:", pkt.IsKeyFrame, pkt.Idx, pkt.Time)
-		// print packet data
-		fmt.Println("srt: server: pkt:", pkt.Data)
-
+		if len(streams) > 0 {
+			fmt.Println("srt: server: streams:", streams)
+			break
+		}
 	}
+
+	/*
+		for {
+			if isEOF {
+				break
+			}
+			// Read a packet
+			pkt, err := demuxer.ReadPacket()
+
+			if err != nil {
+				fmt.Println("srt: server: err:", err)
+				break
+			}
+			// print packet type
+			fmt.Println("srt: server: pkt:", pkt.IsKeyFrame, pkt.Idx, pkt.Time)
+			// print packet data
+			fmt.Println("srt: server: pkt:", pkt.Data)
+
+		}
+
+	*/
 
 	return nil
 }
