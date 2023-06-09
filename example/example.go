@@ -2,9 +2,9 @@ package main
 
 import (
 	"flag"
-	"github.com/cleoag/hls/example/srt"
-	"github.com/nareix/joy4/av/avutil"
+	"github.com/nareix/joy4/av"
 	"github.com/nareix/joy4/format/rtmp"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -22,29 +22,59 @@ func init() {
 func main() {
 
 	modePtr := flag.Int("mode", 0, "HLS Mode (0,1,2)")
-	fragLenPtr := flag.Int("fraglen", 100, "HLS Fragment Length (ms)")
-	bufferLenPtr := flag.Int("bufferlen", 1, "HLS Buffer Length (sec)")
-	initialDurationPtr := flag.Int("initialduration", 1, "HLS Initial duration (sec)")
+	fragLenPtr := flag.Int("fraglen", 1000, "HLS Fragment Length (ms)")
+	bufferLenPtr := flag.Int("bufferlen", 2, "HLS Buffer Length (sec)")
+	initialDurationPtr := flag.Int("initialduration", 2, "HLS Initial duration (sec)")
 
 	flag.Parse()
 
 	pub := &hls.Publisher{Mode: hls.Mode(*modePtr), FragmentLength: time.Duration(*fragLenPtr) * time.Millisecond, BufferLength: time.Duration(*bufferLenPtr) * time.Second, InitialDuration: time.Duration(*initialDurationPtr) * time.Second}
 
 	rts := &rtmp.Server{Addr: ":1935",
+		HandleConn: func(conn *rtmp.Conn) {
+			log.Println("new connection", conn.NetConn().RemoteAddr())
+		},
 		HandlePublish: func(c *rtmp.Conn) {
 			defer c.Close()
 			log.Println("publish started from", c.NetConn().RemoteAddr())
-			if err := avutil.CopyFile(pub, c); err != nil {
-				log.Printf("error: publishing from %s: %+v", c.NetConn().RemoteAddr(), err)
+			var streams []av.CodecData
+			var err error
+			if streams, err = c.Streams(); err != nil {
+				return
 			}
+			if err = pub.WriteHeader(streams); err != nil {
+				return
+			}
+
+			for {
+				var pkt av.Packet
+				if pkt, err = c.ReadPacket(); err != nil {
+					if err == io.EOF {
+						break
+					}
+					return
+				}
+				log.Println("publish", pkt.Time, pkt.IsKeyFrame, pkt.Idx, len(pkt.Data))
+				if err = pub.WritePacket(pkt); err != nil {
+					return
+				}
+			}
+
+			if err = pub.WriteTrailer(); err != nil {
+				return
+			}
+			//			if err := avutil.CopyFile(pub, c); err != nil {
+			//				log.Printf("error: publishing from %s: %+v", c.NetConn().RemoteAddr(), err)
+			//				pub.Close()
+			//			}
 		},
 	}
 
-	sss := &srt.Server{Host: "127.0.0.1", Port: 12345}
+	//	sss := &srt.Server{Host: "127.0.0.1", Port: 12345}
 
 	var eg errgroup.Group
 	eg.Go(rts.ListenAndServe)
-	eg.Go(sss.ListenAndServe)
+	//	eg.Go(sss.ListenAndServe)
 
 	http.Handle("/exit/", http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
 		pub.Close()

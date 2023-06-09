@@ -3,6 +3,7 @@ package hls
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"sync"
@@ -233,6 +234,10 @@ func (p *Publisher) MPD() string {
 
 // Close frees resources associated with the publisher
 func (p *Publisher) Close() {
+	if p.Closed == true {
+		return
+	}
+	log.Println("closing hls publisher for stream id:", p.pid)
 	p.Closed = true
 	p.state.Store(hlsState{})
 	for _, track := range p.tracks {
