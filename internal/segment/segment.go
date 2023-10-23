@@ -125,13 +125,14 @@ func (s *Segment) Release() {
 	}
 
 	s.size = 0
+	fileName := s.f.Name()
 
 	err := s.f.Close()
 	if err != nil {
 		return
 	}
 
-	errR := os.Remove(s.f.Name())
+	errR := os.Remove(fileName)
 	if errR != nil {
 		return
 	}
